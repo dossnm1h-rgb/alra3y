@@ -6,6 +6,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 const kBrown = Color(0xFFC97A2B);
 const kTile = Color(0xFFFBF4EF);
+const kKhalafat = 'الخلفات';
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -62,6 +63,51 @@ void snack(BuildContext context, String msg) {
   ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text(msg)));
 }
 
+/// العمر محسوب من تاريخ الميلاد.
+String ageText(String dateStr) {
+  final d = DateTime.tryParse(dateStr);
+  if (d == null) return 'غير معروف';
+  final now = DateTime.now();
+  final today = DateTime(now.year, now.month, now.day);
+  final days = (today.difference(d).inHours / 24).round();
+  if (days < 0) return 'لم يولد بعد';
+  if (days == 0) return 'مولود اليوم';
+  if (days < 30) return '$days يوم';
+  if (days < 365) {
+    final m = days ~/ 30;
+    final r = days % 30;
+    return r == 0 ? '$m شهر' : '$m شهر و$r يوم';
+  }
+  final y = days ~/ 365;
+  final m = (days % 365) ~/ 30;
+  return m == 0 ? '$y سنة' : '$y سنة و$m شهر';
+}
+
+Future<String?> askText(BuildContext context, String title, String initial) {
+  final c = TextEditingController(text: initial);
+  return showDialog<String>(
+    context: context,
+    builder: (ctx) => AlertDialog(
+      title: Text(title),
+      content: TextField(
+        controller: c,
+        autofocus: true,
+        decoration: const InputDecoration(border: OutlineInputBorder()),
+      ),
+      actions: [
+        TextButton(
+          onPressed: () => Navigator.pop(ctx),
+          child: const Text('إلغاء'),
+        ),
+        FilledButton(
+          onPressed: () => Navigator.pop(ctx, c.text.trim()),
+          child: const Text('حفظ'),
+        ),
+      ],
+    ),
+  );
+}
+
 // ───────────────────────── النماذج ─────────────────────────
 
 class Animal {
@@ -76,7 +122,9 @@ class Animal {
   String pen;
   String purpose;
   String fatherId; // فاضي = غير محدد
+  String fatherText; // أب مكتوب يدوي
   String motherId;
+  String motherText;
   Set<String> tags;
 
   Animal({
@@ -91,7 +139,9 @@ class Animal {
     this.pen = '',
     this.purpose = 'تربية',
     this.fatherId = '',
+    this.fatherText = '',
     this.motherId = '',
+    this.motherText = '',
     Set<String>? tags,
   }) : tags = tags ?? <String>{};
 
@@ -109,7 +159,9 @@ class Animal {
         'pen': pen,
         'purpose': purpose,
         'fatherId': fatherId,
+        'fatherText': fatherText,
         'motherId': motherId,
+        'motherText': motherText,
         'tags': tags.toList(),
       };
 
@@ -125,7 +177,9 @@ class Animal {
         pen: (j['pen'] ?? '').toString(),
         purpose: (j['purpose'] ?? 'تربية').toString(),
         fatherId: (j['fatherId'] ?? '').toString(),
+        fatherText: (j['fatherText'] ?? '').toString(),
         motherId: (j['motherId'] ?? '').toString(),
+        motherText: (j['motherText'] ?? '').toString(),
         tags: ((j['tags'] as List?) ?? const [])
             .map((e) => e.toString())
             .toSet(),
@@ -134,7 +188,7 @@ class Animal {
 
 class EventRec {
   String id;
-  String kind; // اسم القسم
+  String kind; // مفتاح القسم الثابت
   String animalId;
   String date;
   String note;
@@ -168,8 +222,10 @@ class Birth {
   String id;
   String gender; // ذكر / أنثى / فاضي = غير محدد
   String name;
-  String fatherId; // فاضي = غير محدد
+  String fatherId;
+  String fatherText;
   String motherId;
+  String motherText;
   String date;
   String note;
 
@@ -178,7 +234,9 @@ class Birth {
     this.gender = '',
     this.name = '',
     this.fatherId = '',
+    this.fatherText = '',
     this.motherId = '',
+    this.motherText = '',
     required this.date,
     this.note = '',
   });
@@ -188,7 +246,9 @@ class Birth {
         'gender': gender,
         'name': name,
         'fatherId': fatherId,
+        'fatherText': fatherText,
         'motherId': motherId,
+        'motherText': motherText,
         'date': date,
         'note': note,
       };
@@ -198,7 +258,9 @@ class Birth {
         gender: (j['gender'] ?? '').toString(),
         name: (j['name'] ?? '').toString(),
         fatherId: (j['fatherId'] ?? '').toString(),
+        fatherText: (j['fatherText'] ?? '').toString(),
         motherId: (j['motherId'] ?? '').toString(),
+        motherText: (j['motherText'] ?? '').toString(),
         date: (j['date'] ?? '').toString(),
         note: (j['note'] ?? '').toString(),
       );
@@ -210,7 +272,10 @@ class Store {
   static final List<Animal> animals = [];
   static final List<EventRec> events = [];
   static final List<Birth> births = [];
+  static final Map<String, String> names = {}; // أسماء الأقسام المخصصة
+  static final Set<String> hidden = {}; // الأقسام المخفية
   static String notes = '';
+  static String farmName = 'العزبه';
   static SharedPreferences? _prefs;
 
   // اسم قسم "البهم" القديم (فيه تطويلة)
@@ -235,13 +300,24 @@ class Store {
             .map((x) => Birth.fromJson(x as Map<String, dynamic>)));
       }
       notes = _prefs!.getString('notes') ?? '';
+      farmName = _prefs!.getString('farmName') ?? 'العزبه';
+      final n = _prefs!.getString('names');
+      if (n != null) {
+        (jsonDecode(n) as Map).forEach((k, v) {
+          names[k.toString()] = v.toString();
+        });
+      }
+      final h = _prefs!.getString('hidden');
+      if (h != null) {
+        hidden.addAll((jsonDecode(h) as List).map((x) => x.toString()));
+      }
 
-      // ترحيل بيانات النسخة القديمة للأقسام الجديدة
+      // ترحيل بيانات النسخ القديمة للأقسام الجديدة
       const tagMap = {'الدافع': 'اللقحات', 'غير منتجة': 'الضرايب'};
       for (final an in animals) {
         an.tags = an.tags
             .map((t) => tagMap[t] ?? t)
-            .where((t) => t == 'اللقحات' || t == 'الضرايب')
+            .where((t) => tagTitles.contains(t))
             .toSet();
       }
       final oldBahm = events.where((x) => x.kind == _oldBahm).toList();
@@ -271,9 +347,13 @@ class Store {
       await p.setString(
           'births', jsonEncode(births.map((x) => x.toJson()).toList()));
       await p.setString('notes', notes);
+      await p.setString('farmName', farmName);
+      await p.setString('names', jsonEncode(names));
+      await p.setString('hidden', jsonEncode(hidden.toList()));
     } catch (_) {}
   }
 
+  /// يحذف الحلال والسجلات والملاحظات (الإعدادات تبقى).
   static Future<void> clear() async {
     animals.clear();
     events.clear();
@@ -286,8 +366,14 @@ class Store {
       animals.where((a) => a.id == id).map((a) => a.title).firstOrNull ??
       'رأس محذوف';
 
-  static String parentTitle(String id) =>
-      id.isEmpty ? 'غير محدد' : animalTitle(id);
+  /// الأب/الأم: من الحلال المسجل، أو مكتوب يدوي.
+  static String parentLabel(String id, String text) {
+    final reg =
+        animals.where((a) => a.id == id).map((a) => a.title).firstOrNull;
+    if (id.isNotEmpty && reg != null) return reg;
+    if (text.isNotEmpty) return text;
+    return id.isNotEmpty ? 'رأس محذوف' : 'غير محدد';
+  }
 }
 
 // ───────────────────────── الأقسام ─────────────────────────
@@ -295,10 +381,14 @@ class Store {
 enum Kind { event, appointment, production, tag, males, females }
 
 class Section {
+  /// المفتاح الثابت للقسم (ما يتغير حتى لو غيّرت الاسم)
   final String title;
   final IconData icon;
   final Kind kind;
   const Section(this.title, this.icon, this.kind);
+
+  /// الاسم الظاهر (ممكن المستخدم يغيّره من الإعدادات)
+  String get name => Store.names[title] ?? title;
 }
 
 const sections = [
@@ -309,6 +399,7 @@ const sections = [
       Kind.appointment),
   Section('الذكور', Icons.male, Kind.males),
   Section('الإناث', Icons.female, Kind.females),
+  Section(kKhalafat, Icons.family_restroom_outlined, Kind.tag),
   Section('الصحة الوقائية', Icons.health_and_safety_outlined, Kind.event),
   Section('مواعيد الضراب', Icons.calendar_month_outlined, Kind.appointment),
   Section('اللقحات', Icons.favorite_border, Kind.tag),
@@ -319,12 +410,21 @@ const sections = [
 List<String> get tagTitles =>
     sections.where((s) => s.kind == Kind.tag).map((s) => s.title).toList();
 
+List<Section> get visibleSections =>
+    sections.where((s) => !Store.hidden.contains(s.title)).toList();
+
+String sectionName(String id) =>
+    sections.where((s) => s.title == id).map((s) => s.name).firstOrNull ?? id;
+
 List<Animal> animalsFor(Section s) {
   switch (s.kind) {
     case Kind.males:
       return Store.animals.where((a) => a.gender == 'ذكر').toList();
     case Kind.females:
-      return Store.animals.where((a) => a.gender == 'أنثى').toList();
+      // الأمهات اللي ولدت تنتقل للخلفات، وترجع هنا لما تنشال منها
+      return Store.animals
+          .where((a) => a.gender == 'أنثى' && !a.tags.contains(kKhalafat))
+          .toList();
     case Kind.tag:
       return Store.animals.where((a) => a.tags.contains(s.title)).toList();
     case Kind.event:
@@ -355,31 +455,8 @@ String details(Animal a) => [
       a.purpose,
     ].join('  |  ');
 
-Widget parentDropdown({
-  required String label,
-  required List<Animal> options,
-  required String emptyHint,
-  required String? value,
-  required ValueChanged<String?> onChanged,
-}) {
-  return DropdownButtonFormField<String?>(
-    value: value,
-    isExpanded: true,
-    decoration: InputDecoration(
-      labelText: label,
-      helperText: options.isEmpty ? emptyHint : null,
-      border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
-    ),
-    items: [
-      const DropdownMenuItem<String?>(value: null, child: Text('غير محدد')),
-      ...options.map(
-          (a) => DropdownMenuItem<String?>(value: a.id, child: Text(a.title))),
-    ],
-    onChanged: onChanged,
-  );
-}
-
-Widget animalCard(Animal a, {VoidCallback? onTap, Widget? trailing}) {
+Widget animalCard(Animal a,
+    {VoidCallback? onTap, Widget? trailing, String? extra}) {
   return Container(
     decoration: BoxDecoration(
       color: kTile,
@@ -388,10 +465,108 @@ Widget animalCard(Animal a, {VoidCallback? onTap, Widget? trailing}) {
     child: ListTile(
       onTap: onTap,
       title: Text(a.title, style: const TextStyle(fontWeight: FontWeight.w800)),
-      subtitle: Text(details(a)),
+      subtitle: Text(extra == null ? details(a) : '${details(a)}\n$extra'),
       trailing: trailing,
     ),
   );
+}
+
+// ───────────────────────── خانة الأب/الأم ─────────────────────────
+
+/// اختيار من الحلال المسجل، أو "كتابة يدوية" لو الأب/الأم مو مسجلين.
+class ParentField extends StatefulWidget {
+  final String label;
+  final List<Animal> options;
+  final String emptyHint;
+  final String initialId;
+  final String initialText;
+  final void Function(String id, String text) onChanged;
+
+  const ParentField({
+    super.key,
+    required this.label,
+    required this.options,
+    required this.emptyHint,
+    required this.initialId,
+    required this.initialText,
+    required this.onChanged,
+  });
+
+  @override
+  State<ParentField> createState() => _ParentFieldState();
+}
+
+class _ParentFieldState extends State<ParentField> {
+  static const typed = '__typed__';
+  String? selected; // null = غير محدد
+  late final TextEditingController text;
+
+  @override
+  void initState() {
+    super.initState();
+    text = TextEditingController(text: widget.initialText);
+    if (widget.initialId.isNotEmpty &&
+        widget.options.any((a) => a.id == widget.initialId)) {
+      selected = widget.initialId;
+    } else if (widget.initialText.isNotEmpty) {
+      selected = typed;
+    } else {
+      selected = null;
+    }
+  }
+
+  @override
+  void dispose() {
+    text.dispose();
+    super.dispose();
+  }
+
+  void notify() {
+    final id = (selected != null && selected != typed) ? selected! : '';
+    final t = selected == typed ? text.text.trim() : '';
+    widget.onChanged(id, t);
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Column(
+      children: [
+        DropdownButtonFormField<String?>(
+          value: selected,
+          isExpanded: true,
+          decoration: InputDecoration(
+            labelText: widget.label,
+            helperText: widget.options.isEmpty ? widget.emptyHint : null,
+            border: OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
+          ),
+          items: [
+            const DropdownMenuItem<String?>(
+                value: null, child: Text('غير محدد')),
+            ...widget.options.map((a) =>
+                DropdownMenuItem<String?>(value: a.id, child: Text(a.title))),
+            const DropdownMenuItem<String?>(
+                value: typed, child: Text('كتابة يدوية ✎')),
+          ],
+          onChanged: (v) {
+            setState(() => selected = v);
+            notify();
+          },
+        ),
+        if (selected == typed) ...[
+          const SizedBox(height: 10),
+          TextField(
+            controller: text,
+            decoration: InputDecoration(
+              hintText: 'اكتب اسم أو رقم ${widget.label}',
+              border:
+                  OutlineInputBorder(borderRadius: BorderRadius.circular(18)),
+            ),
+            onChanged: (_) => notify(),
+          ),
+        ],
+      ],
+    );
+  }
 }
 
 // ───────────────────────── الصفحة الرئيسية ─────────────────────────
@@ -435,13 +610,13 @@ class _HomePageState extends State<HomePage> {
         backgroundColor: Colors.white,
         elevation: 0,
         titleSpacing: 20,
-        title: const Column(
+        title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: [
-            Text('أهلاً بك ...',
+            const Text('أهلاً بك ...',
                 style: TextStyle(fontSize: 19, fontWeight: FontWeight.w800)),
-            Text('العزبه',
-                style: TextStyle(fontSize: 17, color: Colors.black87)),
+            Text(Store.farmName,
+                style: const TextStyle(fontSize: 17, color: Colors.black87)),
           ],
         ),
         actions: [
@@ -516,12 +691,13 @@ class _HomePageState extends State<HomePage> {
   }
 
   Widget _grid() {
+    final list = visibleSections;
     return SingleChildScrollView(
       padding: const EdgeInsets.fromLTRB(18, 16, 18, 110),
       child: GridView.builder(
         shrinkWrap: true,
         physics: const NeverScrollableScrollPhysics(),
-        itemCount: sections.length,
+        itemCount: list.length,
         gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
           crossAxisCount: 3,
           crossAxisSpacing: 12,
@@ -529,7 +705,7 @@ class _HomePageState extends State<HomePage> {
           childAspectRatio: .93,
         ),
         itemBuilder: (context, i) {
-          final item = sections[i];
+          final item = list[i];
           final count = countFor(item);
           return InkWell(
             borderRadius: BorderRadius.circular(22),
@@ -542,15 +718,20 @@ class _HomePageState extends State<HomePage> {
                     borderRadius: BorderRadius.circular(22),
                   ),
                   child: Center(
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      children: [
-                        Icon(item.icon, size: 40, color: kBrown),
-                        const SizedBox(height: 10),
-                        Text(item.title,
-                            textAlign: TextAlign.center,
-                            style: const TextStyle(fontSize: 16)),
-                      ],
+                    child: Padding(
+                      padding: const EdgeInsets.symmetric(horizontal: 4),
+                      child: Column(
+                        mainAxisSize: MainAxisSize.min,
+                        children: [
+                          Icon(item.icon, size: 40, color: kBrown),
+                          const SizedBox(height: 10),
+                          Text(item.name,
+                              textAlign: TextAlign.center,
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                              style: const TextStyle(fontSize: 15)),
+                        ],
+                      ),
                     ),
                   ),
                 ),
@@ -609,8 +790,32 @@ class SectionAnimalsPage extends StatefulWidget {
 
 class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
   Section get s => widget.section;
+  bool get isKhalafat => s.title == kKhalafat;
+
+  Future<void> addDelivery() async {
+    if (!Store.animals.any((a) => a.gender == 'أنثى')) {
+      snack(context, 'سجّل أنثى أول من الصفحة الرئيسية');
+      return;
+    }
+    final b = await showDialog<Birth>(
+      context: context,
+      builder: (_) => const AddBirthDialog(delivered: true),
+    );
+    if (b != null) {
+      Store.births.add(b);
+      final mom = Store.animals.where((a) => a.id == b.motherId).firstOrNull;
+      if (mom != null) mom.tags.add(kKhalafat);
+      setState(() {});
+      await Store.save();
+      if (mounted) snack(context, 'انضاف المولود للإنتاج والأم للخلفات');
+    }
+  }
 
   Future<void> addToSection() async {
+    if (isKhalafat) {
+      await addDelivery();
+      return;
+    }
     final candidates =
         Store.animals.where((a) => !a.tags.contains(s.title)).toList();
     if (Store.animals.isEmpty) {
@@ -624,7 +829,7 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
     final picked = await showDialog<Animal>(
       context: context,
       builder: (ctx) => SimpleDialog(
-        title: Text('اختر رأس لقسم ${s.title}'),
+        title: Text('اختر رأس لقسم ${s.name}'),
         children: candidates
             .map((a) => SimpleDialogOption(
                   onPressed: () => Navigator.pop(ctx, a),
@@ -645,7 +850,7 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
     final isTag = s.kind == Kind.tag;
     return Scaffold(
       appBar: AppBar(
-        title: Text(s.title,
+        title: Text(s.name,
             style: const TextStyle(fontWeight: FontWeight.w800)),
         backgroundColor: Colors.white,
         elevation: 0,
@@ -653,9 +858,11 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
       body: list.isEmpty
           ? Center(
               child: Text(
-                isTag
-                    ? 'ما فيه رؤوس بهذا القسم\nاضغط + عشان تضيف'
-                    : 'ما فيه رؤوس بهذا القسم للحين',
+                isKhalafat
+                    ? 'ما فيه أمهات ولدت\nاضغط "ولدت" عشان تسجل ولادة'
+                    : isTag
+                        ? 'ما فيه رؤوس بهذا القسم\nاضغط + عشان تضيف'
+                        : 'ما فيه رؤوس بهذا القسم للحين',
                 textAlign: TextAlign.center,
                 style: const TextStyle(fontSize: 16),
               ),
@@ -666,8 +873,10 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
               separatorBuilder: (_, __) => const SizedBox(height: 10),
               itemBuilder: (context, i) {
                 final a = list[i];
+                final n = Store.births.where((b) => b.motherId == a.id).length;
                 return animalCard(
                   a,
+                  extra: isKhalafat ? 'عدد المواليد: $n' : null,
                   onTap: () async {
                     await Navigator.push(
                       context,
@@ -678,7 +887,9 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
                   },
                   trailing: isTag
                       ? IconButton(
-                          tooltip: 'إزالة من القسم',
+                          tooltip: isKhalafat
+                              ? 'إزالة من الخلفات (ترجع للإناث)'
+                              : 'إزالة من القسم',
                           icon: const Icon(Icons.remove_circle_outline),
                           onPressed: () async {
                             setState(() => a.tags.remove(s.title));
@@ -689,14 +900,22 @@ class _SectionAnimalsPageState extends State<SectionAnimalsPage> {
                 );
               },
             ),
-      floatingActionButton: isTag
-          ? FloatingActionButton(
+      floatingActionButton: isKhalafat
+          ? FloatingActionButton.extended(
               backgroundColor: kBrown,
               foregroundColor: Colors.white,
               onPressed: addToSection,
-              child: const Icon(Icons.add),
+              icon: const Icon(Icons.add),
+              label: const Text('ولدت'),
             )
-          : null,
+          : isTag
+              ? FloatingActionButton(
+                  backgroundColor: kBrown,
+                  foregroundColor: Colors.white,
+                  onPressed: addToSection,
+                  child: const Icon(Icons.add),
+                )
+              : null,
     );
   }
 }
@@ -751,10 +970,24 @@ class _EventsPageState extends State<EventsPage> {
     }
     final rec = await showDialog<EventRec>(
       context: context,
-      builder: (_) => AddEventDialog(kind: s.title),
+      builder: (_) => AddEventDialog(kind: s.title, label: s.name),
     );
     if (rec != null) {
       setState(() => Store.events.add(rec));
+      await Store.save();
+    }
+  }
+
+  Future<void> edit(EventRec e) async {
+    final rec = await showDialog<EventRec>(
+      context: context,
+      builder: (_) => AddEventDialog(kind: s.title, label: s.name, initial: e),
+    );
+    if (rec != null) {
+      setState(() {
+        final i = Store.events.indexWhere((x) => x.id == e.id);
+        if (i >= 0) Store.events[i] = rec;
+      });
       await Store.save();
     }
   }
@@ -764,7 +997,7 @@ class _EventsPageState extends State<EventsPage> {
     final list = items;
     return Scaffold(
       appBar: AppBar(
-        title: Text(s.title,
+        title: Text(s.name,
             style: const TextStyle(fontWeight: FontWeight.w800)),
         backgroundColor: Colors.white,
         elevation: 0,
@@ -793,12 +1026,23 @@ class _EventsPageState extends State<EventsPage> {
                         ? when(e)
                         : '${when(e)}\n${e.note}'),
                     isThreeLine: e.note.isNotEmpty,
-                    trailing: IconButton(
-                      icon: const Icon(Icons.delete_outline),
-                      onPressed: () async {
-                        setState(() => Store.events.remove(e));
-                        await Store.save();
-                      },
+                    trailing: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        IconButton(
+                          tooltip: 'تعديل',
+                          icon: const Icon(Icons.edit_outlined),
+                          onPressed: () => edit(e),
+                        ),
+                        IconButton(
+                          tooltip: 'حذف',
+                          icon: const Icon(Icons.delete_outline),
+                          onPressed: () async {
+                            setState(() => Store.events.remove(e));
+                            await Store.save();
+                          },
+                        ),
+                      ],
                     ),
                   ),
                 );
@@ -816,16 +1060,35 @@ class _EventsPageState extends State<EventsPage> {
 
 class AddEventDialog extends StatefulWidget {
   final String kind;
-  const AddEventDialog({super.key, required this.kind});
+  final String label;
+  final EventRec? initial;
+  const AddEventDialog({
+    super.key,
+    required this.kind,
+    required this.label,
+    this.initial,
+  });
 
   @override
   State<AddEventDialog> createState() => _AddEventDialogState();
 }
 
 class _AddEventDialogState extends State<AddEventDialog> {
-  String? animalId = Store.animals.first.id;
-  DateTime date = DateTime.now();
-  final note = TextEditingController();
+  late String? animalId;
+  late DateTime date;
+  late final TextEditingController note;
+
+  @override
+  void initState() {
+    super.initState();
+    final init = widget.initial;
+    animalId = (init != null && Store.animals.any((a) => a.id == init.animalId))
+        ? init.animalId
+        : Store.animals.first.id;
+    date = (init != null ? DateTime.tryParse(init.date) : null) ??
+        DateTime.now();
+    note = TextEditingController(text: init?.note ?? '');
+  }
 
   @override
   void dispose() {
@@ -836,7 +1099,9 @@ class _AddEventDialogState extends State<AddEventDialog> {
   @override
   Widget build(BuildContext context) {
     return AlertDialog(
-      title: Text('إضافة - ${widget.kind}'),
+      title: Text(widget.initial == null
+          ? 'إضافة - ${widget.label}'
+          : 'تعديل - ${widget.label}'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
@@ -887,7 +1152,7 @@ class _AddEventDialogState extends State<AddEventDialog> {
             Navigator.pop(
               context,
               EventRec(
-                id: newId(),
+                id: widget.initial?.id ?? newId(),
                 kind: widget.kind,
                 animalId: animalId!,
                 date: fmtDate(date),
@@ -929,6 +1194,20 @@ class _ProductionPageState extends State<ProductionPage> {
     }
   }
 
+  Future<void> edit(Birth old) async {
+    final b = await showDialog<Birth>(
+      context: context,
+      builder: (_) => AddBirthDialog(initial: old),
+    );
+    if (b != null) {
+      setState(() {
+        final i = Store.births.indexWhere((x) => x.id == old.id);
+        if (i >= 0) Store.births[i] = b;
+      });
+      await Store.save();
+    }
+  }
+
   Widget countChip(String label, int n) => Container(
         padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
         decoration: BoxDecoration(
@@ -945,8 +1224,8 @@ class _ProductionPageState extends State<ProductionPage> {
     final females = Store.births.where((b) => b.gender == 'أنثى').length;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('الإنتاج',
-            style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(sectionName('الإنتاج'),
+            style: const TextStyle(fontWeight: FontWeight.w800)),
         backgroundColor: Colors.white,
         elevation: 0,
       ),
@@ -980,6 +1259,11 @@ class _ProductionPageState extends State<ProductionPage> {
                       final label = b.gender.isEmpty ? 'غير محدد' : b.gender;
                       final title =
                           b.name.isEmpty ? label : '${b.name} - $label';
+                      final lines = [
+                        'الأب: ${Store.parentLabel(b.fatherId, b.fatherText)}  |  الأم: ${Store.parentLabel(b.motherId, b.motherText)}',
+                        'العمر: ${ageText(b.date)}  (${b.date})',
+                        if (b.note.isNotEmpty) b.note,
+                      ];
                       return Container(
                         decoration: BoxDecoration(
                           color: kTile,
@@ -997,15 +1281,25 @@ class _ProductionPageState extends State<ProductionPage> {
                           title: Text(title,
                               style: const TextStyle(
                                   fontWeight: FontWeight.w800)),
-                          subtitle: Text(
-                              'الأب: ${Store.parentTitle(b.fatherId)}  |  الأم: ${Store.parentTitle(b.motherId)}\n${b.date}${b.note.isEmpty ? '' : '\n${b.note}'}'),
+                          subtitle: Text(lines.join('\n')),
                           isThreeLine: true,
-                          trailing: IconButton(
-                            icon: const Icon(Icons.delete_outline),
-                            onPressed: () async {
-                              setState(() => Store.births.remove(b));
-                              await Store.save();
-                            },
+                          trailing: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              IconButton(
+                                tooltip: 'تعديل',
+                                icon: const Icon(Icons.edit_outlined),
+                                onPressed: () => edit(b),
+                              ),
+                              IconButton(
+                                tooltip: 'حذف',
+                                icon: const Icon(Icons.delete_outline),
+                                onPressed: () async {
+                                  setState(() => Store.births.remove(b));
+                                  await Store.save();
+                                },
+                              ),
+                            ],
                           ),
                         ),
                       );
@@ -1025,19 +1319,42 @@ class _ProductionPageState extends State<ProductionPage> {
 }
 
 class AddBirthDialog extends StatefulWidget {
-  const AddBirthDialog({super.key});
+  final Birth? initial;
+
+  /// من قسم الخلفات: الأم لازم تكون من الإناث المسجلة، والزر "ولدت"
+  final bool delivered;
+
+  const AddBirthDialog({super.key, this.initial, this.delivered = false});
 
   @override
   State<AddBirthDialog> createState() => _AddBirthDialogState();
 }
 
 class _AddBirthDialogState extends State<AddBirthDialog> {
-  String gender = 'أنثى';
-  String? fatherId; // null = غير محدد
-  String? motherId;
-  DateTime date = DateTime.now();
-  final name = TextEditingController();
-  final note = TextEditingController();
+  late String gender;
+  late String fatherId;
+  late String fatherText;
+  late String motherId;
+  late String motherText;
+  late DateTime date;
+  late final TextEditingController name;
+  late final TextEditingController note;
+
+  @override
+  void initState() {
+    super.initState();
+    final i = widget.initial;
+    gender = (i != null && (i.gender == 'ذكر' || i.gender == 'أنثى'))
+        ? i.gender
+        : 'أنثى';
+    fatherId = i?.fatherId ?? '';
+    fatherText = i?.fatherText ?? '';
+    motherId = i?.motherId ?? '';
+    motherText = i?.motherText ?? '';
+    date = (i != null ? DateTime.tryParse(i.date) : null) ?? DateTime.now();
+    name = TextEditingController(text: i?.name ?? '');
+    note = TextEditingController(text: i?.note ?? '');
+  }
 
   @override
   void dispose() {
@@ -1046,40 +1363,38 @@ class _AddBirthDialogState extends State<AddBirthDialog> {
     super.dispose();
   }
 
-  Widget parentField({
-    required String label,
-    required List<Animal> options,
-    required String emptyHint,
-    required String? value,
-    required ValueChanged<String?> onChanged,
-  }) {
-    return DropdownButtonFormField<String?>(
-      value: value,
-      isExpanded: true,
-      decoration: InputDecoration(
-        labelText: label,
-        helperText: options.isEmpty ? emptyHint : null,
-        border: const OutlineInputBorder(),
-      ),
-      items: [
-        const DropdownMenuItem<String?>(value: null, child: Text('غير محدد')),
-        ...options.map((a) =>
-            DropdownMenuItem<String?>(value: a.id, child: Text(a.title))),
-      ],
-      onChanged: onChanged,
-    );
-  }
-
   @override
   Widget build(BuildContext context) {
     final males = Store.animals.where((a) => a.gender == 'ذكر').toList();
     final females = Store.animals.where((a) => a.gender == 'أنثى').toList();
+    final canSave = !(widget.delivered && motherId.isEmpty);
     return AlertDialog(
-      title: const Text('إضافة مولود'),
+      title: Text(widget.delivered
+          ? 'تسجيل ولادة'
+          : widget.initial == null
+              ? 'إضافة مولود'
+              : 'تعديل مولود'),
       content: SingleChildScrollView(
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: [
+            if (widget.delivered) ...[
+              DropdownButtonFormField<String>(
+                value: motherId.isEmpty ? null : motherId,
+                isExpanded: true,
+                hint: const Text('اختر الأم'),
+                decoration: const InputDecoration(
+                  labelText: 'الأم',
+                  border: OutlineInputBorder(),
+                ),
+                items: females
+                    .map((a) =>
+                        DropdownMenuItem(value: a.id, child: Text(a.title)))
+                    .toList(),
+                onChanged: (v) => setState(() => motherId = v ?? ''),
+              ),
+              const SizedBox(height: 12),
+            ],
             SegmentedButton<String>(
               segments: const [
                 ButtonSegment(value: 'أنثى', label: Text('أنثى')),
@@ -1097,25 +1412,35 @@ class _AddBirthDialogState extends State<AddBirthDialog> {
               ),
             ),
             const SizedBox(height: 12),
-            parentField(
+            ParentField(
               label: 'الأب',
               options: males,
-              emptyHint: 'ما فيه ذكور مسجلين في الحلال',
-              value: fatherId,
-              onChanged: (v) => setState(() => fatherId = v),
+              emptyHint: 'ما فيه ذكور مسجلين، تقدر تكتبه يدوي',
+              initialId: fatherId,
+              initialText: fatherText,
+              onChanged: (id, t) {
+                fatherId = id;
+                fatherText = t;
+              },
             ),
-            const SizedBox(height: 12),
-            parentField(
-              label: 'الأم',
-              options: females,
-              emptyHint: 'ما فيه إناث مسجلة في الحلال',
-              value: motherId,
-              onChanged: (v) => setState(() => motherId = v),
-            ),
+            if (!widget.delivered) ...[
+              const SizedBox(height: 12),
+              ParentField(
+                label: 'الأم',
+                options: females,
+                emptyHint: 'ما فيه إناث مسجلة، تقدر تكتبها يدوي',
+                initialId: motherId,
+                initialText: motherText,
+                onChanged: (id, t) {
+                  motherId = id;
+                  motherText = t;
+                },
+              ),
+            ],
             const SizedBox(height: 12),
             OutlinedButton.icon(
               icon: const Icon(Icons.calendar_today_outlined),
-              label: Text(fmtDate(date)),
+              label: Text('تاريخ الميلاد: ${fmtDate(date)}'),
               onPressed: () async {
                 final d = await showDatePicker(
                   context: context,
@@ -1126,6 +1451,9 @@ class _AddBirthDialogState extends State<AddBirthDialog> {
                 if (d != null) setState(() => date = d);
               },
             ),
+            const SizedBox(height: 6),
+            Text('العمر: ${ageText(fmtDate(date))}',
+                style: const TextStyle(color: Colors.black54)),
             const SizedBox(height: 12),
             TextField(
               controller: note,
@@ -1144,21 +1472,25 @@ class _AddBirthDialogState extends State<AddBirthDialog> {
           child: const Text('إلغاء'),
         ),
         FilledButton(
-          onPressed: () {
-            Navigator.pop(
-              context,
-              Birth(
-                id: newId(),
-                gender: gender,
-                name: name.text.trim(),
-                fatherId: fatherId ?? '',
-                motherId: motherId ?? '',
-                date: fmtDate(date),
-                note: note.text.trim(),
-              ),
-            );
-          },
-          child: const Text('حفظ'),
+          onPressed: canSave
+              ? () {
+                  Navigator.pop(
+                    context,
+                    Birth(
+                      id: widget.initial?.id ?? newId(),
+                      gender: gender,
+                      name: name.text.trim(),
+                      fatherId: fatherId,
+                      fatherText: fatherText,
+                      motherId: motherId,
+                      motherText: motherText,
+                      date: fmtDate(date),
+                      note: note.text.trim(),
+                    ),
+                  );
+                }
+              : null,
+          child: Text(widget.delivered ? 'ولدت' : 'حفظ'),
         ),
       ],
     );
@@ -1177,6 +1509,14 @@ class AnimalDetailPage extends StatefulWidget {
 
 class _AnimalDetailPageState extends State<AnimalDetailPage> {
   Animal get a => widget.animal;
+
+  Future<void> edit() async {
+    await Navigator.push(
+      context,
+      MaterialPageRoute(builder: (_) => AddAnimalPage(initial: a)),
+    );
+    if (mounted) setState(() {});
+  }
 
   Future<void> confirmDelete() async {
     final ok = await showDialog<bool>(
@@ -1206,6 +1546,10 @@ class _AnimalDetailPageState extends State<AnimalDetailPage> {
   Widget build(BuildContext context) {
     final recs = Store.events.where((e) => e.animalId == a.id).toList()
       ..sort((x, y) => y.date.compareTo(x.date));
+    final hasParents = a.fatherId.isNotEmpty ||
+        a.fatherText.isNotEmpty ||
+        a.motherId.isNotEmpty ||
+        a.motherText.isNotEmpty;
     return Scaffold(
       appBar: AppBar(
         title: Text(a.title,
@@ -1213,6 +1557,11 @@ class _AnimalDetailPageState extends State<AnimalDetailPage> {
         backgroundColor: Colors.white,
         elevation: 0,
         actions: [
+          IconButton(
+            tooltip: 'تعديل',
+            icon: const Icon(Icons.edit_outlined),
+            onPressed: edit,
+          ),
           IconButton(
             tooltip: 'حذف',
             icon: const Icon(Icons.delete_outline),
@@ -1231,10 +1580,10 @@ class _AnimalDetailPageState extends State<AnimalDetailPage> {
             ),
             child: Text(details(a), style: const TextStyle(fontSize: 16)),
           ),
-          if (a.fatherId.isNotEmpty || a.motherId.isNotEmpty) ...[
+          if (hasParents) ...[
             const SizedBox(height: 12),
             Text(
-              'الأب: ${Store.parentTitle(a.fatherId)}  |  الأم: ${Store.parentTitle(a.motherId)}',
+              'الأب: ${Store.parentLabel(a.fatherId, a.fatherText)}  |  الأم: ${Store.parentLabel(a.motherId, a.motherText)}',
               style: const TextStyle(fontSize: 16),
             ),
           ],
@@ -1245,16 +1594,17 @@ class _AnimalDetailPageState extends State<AnimalDetailPage> {
           Wrap(
             spacing: 8,
             runSpacing: 8,
-            children: tagTitles
+            children: sections
+                .where((x) => x.kind == Kind.tag)
                 .map((t) => FilterChip(
-                      label: Text(t),
-                      selected: a.tags.contains(t),
+                      label: Text(t.name),
+                      selected: a.tags.contains(t.title),
                       onSelected: (v) async {
                         setState(() {
                           if (v) {
-                            a.tags.add(t);
+                            a.tags.add(t.title);
                           } else {
-                            a.tags.remove(t);
+                            a.tags.remove(t.title);
                           }
                         });
                         await Store.save();
@@ -1271,7 +1621,7 @@ class _AnimalDetailPageState extends State<AnimalDetailPage> {
           else
             ...recs.map((e) => ListTile(
                   contentPadding: EdgeInsets.zero,
-                  title: Text(e.kind),
+                  title: Text(sectionName(e.kind)),
                   subtitle:
                       Text(e.note.isEmpty ? e.date : '${e.date}\n${e.note}'),
                 )),
@@ -1345,15 +1695,44 @@ class SettingsView extends StatelessWidget {
     return ListView(
       padding: const EdgeInsets.all(18),
       children: [
+        ListTile(
+          leading: const Icon(Icons.home_outlined),
+          title: const Text('اسم العزبة'),
+          subtitle: Text(Store.farmName),
+          trailing: const Icon(Icons.edit_outlined),
+          onTap: () async {
+            final v = await askText(context, 'اسم العزبة', Store.farmName);
+            if (v != null && v.isNotEmpty) {
+              Store.farmName = v;
+              await Store.save();
+              onChanged();
+            }
+          },
+        ),
+        ListTile(
+          leading: const Icon(Icons.dashboard_customize_outlined),
+          title: const Text('تخصيص الأقسام'),
+          subtitle: const Text('غيّر أسماء الأقسام أو أخفِ اللي ما تحتاجه'),
+          trailing: const Icon(Icons.chevron_left),
+          onTap: () async {
+            await Navigator.push(
+              context,
+              MaterialPageRoute(builder: (_) => const SectionsSettingsPage()),
+            );
+            onChanged();
+          },
+        ),
+        const Divider(),
         const ListTile(
           leading: Icon(Icons.info_outline),
           title: Text('الراعي'),
-          subtitle: Text('النسخة 0.2'),
+          subtitle: Text('النسخة 0.3'),
         ),
         ListTile(
           leading: const Icon(Icons.delete_forever_outlined, color: Colors.red),
           title: const Text('حذف كل البيانات',
               style: TextStyle(color: Colors.red)),
+          subtitle: const Text('يحذف الحلال والسجلات والملاحظات (الإعدادات تبقى)'),
           onTap: () async {
             final ok = await showDialog<bool>(
               context: context,
@@ -1382,29 +1761,151 @@ class SettingsView extends StatelessWidget {
   }
 }
 
-// ───────────────────────── إضافة رأس ─────────────────────────
+class SectionsSettingsPage extends StatefulWidget {
+  const SectionsSettingsPage({super.key});
+
+  @override
+  State<SectionsSettingsPage> createState() => _SectionsSettingsPageState();
+}
+
+class _SectionsSettingsPageState extends State<SectionsSettingsPage> {
+  Future<void> rename(Section s) async {
+    final v = await askText(context, 'اسم القسم', s.name);
+    if (v == null) return;
+    setState(() {
+      if (v.isEmpty || v == s.title) {
+        Store.names.remove(s.title);
+      } else {
+        Store.names[s.title] = v;
+      }
+    });
+    await Store.save();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      appBar: AppBar(
+        title: const Text('تخصيص الأقسام',
+            style: TextStyle(fontWeight: FontWeight.w800)),
+        backgroundColor: Colors.white,
+        elevation: 0,
+      ),
+      body: ListView(
+        padding: const EdgeInsets.all(18),
+        children: [
+          const Text(
+            'اضغط على القلم لتغيير اسم القسم، والمفتاح يظهر القسم أو يخفيه من الرئيسية. بيانات القسم المخفي ما تنحذف.',
+            style: TextStyle(color: Colors.black54),
+          ),
+          const SizedBox(height: 12),
+          ...sections.map((s) => ListTile(
+                leading: Icon(s.icon, color: kBrown),
+                title: Text(s.name),
+                subtitle: s.name == s.title
+                    ? null
+                    : Text('الاسم الأصلي: ${s.title}'),
+                trailing: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    IconButton(
+                      tooltip: 'تغيير الاسم',
+                      icon: const Icon(Icons.edit_outlined),
+                      onPressed: () => rename(s),
+                    ),
+                    Switch(
+                      value: !Store.hidden.contains(s.title),
+                      onChanged: (v) async {
+                        setState(() {
+                          if (v) {
+                            Store.hidden.remove(s.title);
+                          } else {
+                            Store.hidden.add(s.title);
+                          }
+                        });
+                        await Store.save();
+                      },
+                    ),
+                  ],
+                ),
+              )),
+          const SizedBox(height: 12),
+          TextButton.icon(
+            icon: const Icon(Icons.restore),
+            label: const Text('إرجاع الأسماء الأصلية'),
+            onPressed: () async {
+              setState(() => Store.names.clear());
+              await Store.save();
+            },
+          ),
+        ],
+      ),
+    );
+  }
+}
+
+// ───────────────────────── إضافة / تعديل رأس ─────────────────────────
 
 class AddAnimalPage extends StatefulWidget {
-  const AddAnimalPage({super.key});
+  final Animal? initial;
+  const AddAnimalPage({super.key, this.initial});
 
   @override
   State<AddAnimalPage> createState() => _AddAnimalPageState();
 }
 
 class _AddAnimalPageState extends State<AddAnimalPage> {
+  static const types = ['ضأن', 'ماعز', 'إبل'];
+  static const genders = ['أنثى', 'ذكر'];
+  static const colors = ['أبيض', 'أسود', 'أشقر', 'بني', 'أحمر', 'متعدد'];
+  static const ages = [
+    'أقل من سنة',
+    'سنة',
+    'سنتان',
+    '3 سنوات',
+    '4 سنوات فأكثر'
+  ];
+
   final formKey = GlobalKey<FormState>();
-  final name = TextEditingController();
-  final weight = TextEditingController();
-  final price = TextEditingController();
-  final pen = TextEditingController();
+  late final TextEditingController name;
+  late final TextEditingController weight;
+  late final TextEditingController price;
+  late final TextEditingController pen;
 
   String type = 'ضأن';
   String gender = 'أنثى';
   String color = 'أبيض';
   String purpose = 'تربية';
   String? age;
-  String? fatherId;
-  String? motherId;
+  String fatherId = '';
+  String fatherText = '';
+  String motherId = '';
+  String motherText = '';
+
+  bool get editing => widget.initial != null;
+
+  @override
+  void initState() {
+    super.initState();
+    final a = widget.initial;
+    name = TextEditingController(text: a?.name ?? '');
+    weight = TextEditingController(text: a?.weight ?? '');
+    price = TextEditingController(text: a?.price ?? '');
+    pen = TextEditingController(text: a?.pen ?? '');
+    if (a != null) {
+      type = types.contains(a.type) ? a.type : types.first;
+      gender = genders.contains(a.gender) ? a.gender : genders.first;
+      color = colors.contains(a.color) ? a.color : colors.first;
+      purpose = (a.purpose == 'تربية' || a.purpose == 'تسمين')
+          ? a.purpose
+          : 'تربية';
+      age = ages.contains(a.age) ? a.age : null;
+      fatherId = a.fatherId;
+      fatherText = a.fatherText;
+      motherId = a.motherId;
+      motherText = a.motherText;
+    }
+  }
 
   @override
   void dispose() {
@@ -1436,12 +1937,52 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
         ),
       );
 
+  Future<void> save() async {
+    if (!formKey.currentState!.validate()) return;
+    final a = widget.initial;
+    if (a != null) {
+      a.name = name.text.trim();
+      a.type = type;
+      a.gender = gender;
+      a.color = color;
+      a.age = age ?? '';
+      a.weight = normalizeDigits(weight.text);
+      a.price = normalizeDigits(price.text);
+      a.pen = normalizeDigits(pen.text);
+      a.purpose = purpose;
+      a.fatherId = fatherId;
+      a.fatherText = fatherText;
+      a.motherId = motherId;
+      a.motherText = motherText;
+    } else {
+      Store.animals.add(Animal(
+        id: newId(),
+        name: name.text.trim(),
+        type: type,
+        gender: gender,
+        color: color,
+        age: age ?? '',
+        weight: normalizeDigits(weight.text),
+        price: normalizeDigits(price.text),
+        pen: normalizeDigits(pen.text),
+        purpose: purpose,
+        fatherId: fatherId,
+        fatherText: fatherText,
+        motherId: motherId,
+        motherText: motherText,
+      ));
+    }
+    await Store.save();
+    if (mounted) Navigator.pop(context);
+  }
+
   @override
   Widget build(BuildContext context) {
+    final selfId = widget.initial?.id;
     return Scaffold(
       appBar: AppBar(
-        title: const Text('إضافة رأس',
-            style: TextStyle(fontWeight: FontWeight.w800)),
+        title: Text(editing ? 'تعديل رأس' : 'إضافة رأس',
+            style: const TextStyle(fontWeight: FontWeight.w800)),
         centerTitle: false,
         backgroundColor: Colors.white,
         elevation: 0,
@@ -1457,16 +1998,18 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
                 color: const Color(0xFFF8EBDD),
                 borderRadius: BorderRadius.circular(20),
               ),
-              child: const Column(
+              child: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text('البيانات الأساسية',
+                  const Text('البيانات الأساسية',
                       style: TextStyle(
                           color: kBrown,
                           fontSize: 20,
                           fontWeight: FontWeight.w800)),
-                  SizedBox(height: 6),
-                  Text('أضف البيانات الأساسية للرأس ...'),
+                  const SizedBox(height: 6),
+                  Text(editing
+                      ? 'عدّل بيانات الرأس ...'
+                      : 'أضف البيانات الأساسية للرأس ...'),
                 ],
               ),
             ),
@@ -1477,7 +2020,7 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
                   child: DropdownButtonFormField<String>(
                     value: type,
                     decoration: field('النوع'),
-                    items: ['ضأن', 'ماعز', 'إبل']
+                    items: types
                         .map((v) =>
                             DropdownMenuItem(value: v, child: Text(v)))
                         .toList(),
@@ -1489,7 +2032,7 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
                   child: DropdownButtonFormField<String>(
                     value: gender,
                     decoration: field('الجنس'),
-                    items: ['أنثى', 'ذكر']
+                    items: genders
                         .map((v) =>
                             DropdownMenuItem(value: v, child: Text(v)))
                         .toList(),
@@ -1502,7 +2045,7 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
             DropdownButtonFormField<String>(
               value: color,
               decoration: field('اختر اللون'),
-              items: ['أبيض', 'أسود', 'أشقر', 'بني', 'أحمر', 'متعدد']
+              items: colors
                   .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                   .toList(),
               onChanged: (v) => setState(() => color = v!),
@@ -1545,26 +2088,38 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
             DropdownButtonFormField<String>(
               value: age,
               decoration: field('العمر'),
-              items: ['أقل من سنة', 'سنة', 'سنتان', '3 سنوات', '4 سنوات فأكثر']
+              items: ages
                   .map((v) => DropdownMenuItem(value: v, child: Text(v)))
                   .toList(),
               onChanged: (v) => setState(() => age = v),
             ),
             const SizedBox(height: 18),
-            parentDropdown(
+            ParentField(
               label: 'الأب (اختياري)',
-              options: Store.animals.where((a) => a.gender == 'ذكر').toList(),
-              emptyHint: 'ما فيه ذكور مسجلين في الحلال',
-              value: fatherId,
-              onChanged: (v) => setState(() => fatherId = v),
+              options: Store.animals
+                  .where((a) => a.gender == 'ذكر' && a.id != selfId)
+                  .toList(),
+              emptyHint: 'ما فيه ذكور مسجلين، تقدر تكتبه يدوي',
+              initialId: fatherId,
+              initialText: fatherText,
+              onChanged: (id, t) {
+                fatherId = id;
+                fatherText = t;
+              },
             ),
             const SizedBox(height: 18),
-            parentDropdown(
+            ParentField(
               label: 'الأم (اختياري)',
-              options: Store.animals.where((a) => a.gender == 'أنثى').toList(),
-              emptyHint: 'ما فيه إناث مسجلة في الحلال',
-              value: motherId,
-              onChanged: (v) => setState(() => motherId = v),
+              options: Store.animals
+                  .where((a) => a.gender == 'أنثى' && a.id != selfId)
+                  .toList(),
+              emptyHint: 'ما فيه إناث مسجلة، تقدر تكتبها يدوي',
+              initialId: motherId,
+              initialText: motherText,
+              onChanged: (id, t) {
+                motherId = id;
+                motherText = t;
+              },
             ),
             const SizedBox(height: 18),
             const Text('الغرض',
@@ -1588,26 +2143,9 @@ class _AddAnimalPageState extends State<AddAnimalPage> {
                   borderRadius: BorderRadius.circular(20),
                 ),
               ),
-              onPressed: () async {
-                if (!formKey.currentState!.validate()) return;
-                Store.animals.add(Animal(
-                  id: newId(),
-                  name: name.text.trim(),
-                  type: type,
-                  gender: gender,
-                  color: color,
-                  age: age ?? '',
-                  weight: normalizeDigits(weight.text),
-                  price: normalizeDigits(price.text),
-                  pen: normalizeDigits(pen.text),
-                  purpose: purpose,
-                  fatherId: fatherId ?? '',
-                  motherId: motherId ?? '',
-                ));
-                await Store.save();
-                if (mounted) Navigator.pop(context);
-              },
-              child: const Text('إضافة', style: TextStyle(fontSize: 18)),
+              onPressed: save,
+              child: Text(editing ? 'حفظ التعديل' : 'إضافة',
+                  style: const TextStyle(fontSize: 18)),
             ),
           ],
         ),
